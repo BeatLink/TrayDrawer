@@ -1,0 +1,21 @@
+.menu.collapsible-systray-popup {
+    min-width: 0;
+}
+
+.collapsible-systray-popup .popup-menu-content {
+    padding: 6px;
+}
+
+.collapsible-systray-grid-item {
+    padding: 6px;
+    border-radius: 4px;
+}
+
+.collapsible-systray-grid-item:hover {
+    background-color: rgba(128, 128, 128, 0.25);
+}
+
+.collapsible-systray-grid-empty {
+    padding: 6px 12px;
+    color: rgba(128, 128, 128, 1);
+}

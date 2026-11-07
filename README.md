@@ -1,4 +1,4 @@
-# Collapsible System Tray
+# Tray Drawer
 
 A Cinnamon panel applet that hosts every kind of tray icon in one place and tucks away the ones you
 do not need to see.
@@ -12,11 +12,11 @@ do not need to see.
 ## Install
 
 ```sh
-ln -s "$PWD/collapsible-systray@beatlink/files/collapsible-systray@beatlink" \
-    ~/.local/share/cinnamon/applets/collapsible-systray@beatlink
+ln -s "$PWD/tray-drawer@beatlink/files/tray-drawer@beatlink" \
+    ~/.local/share/cinnamon/applets/tray-drawer@beatlink
 ```
 
-Then add **Collapsible System Tray** from *System Settings → Applets*, and remove the stock
+Then add **Tray Drawer** from *System Settings → Applets*, and remove the stock
 **System Tray** and **XApp Status Applet**. This applet does both of their jobs; while the stock
 System Tray is running it keeps the legacy XEmbed icons, and the XApp Status Applet would show every
 XApp icon a second time.

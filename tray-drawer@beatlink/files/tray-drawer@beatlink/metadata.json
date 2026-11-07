@@ -1,10 +1,10 @@
 {
-    "uuid": "collapsible-systray@beatlink",
-    "name": "Collapsible System Tray",
+    "uuid": "tray-drawer@beatlink",
+    "name": "Tray Drawer",
     "description": "A system tray that tucks chosen icons and applets into a drawer on the panel",
     "icon": "view-more-horizontal-symbolic",
     "max-instances": 1,
     "author": "BeatLink",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "cinnamon-version": ["6.0", "6.2", "6.4", "6.6", "6.7"]
 }

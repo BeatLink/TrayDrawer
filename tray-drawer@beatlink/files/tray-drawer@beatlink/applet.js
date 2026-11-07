@@ -1,4 +1,4 @@
-// Collapsible System Tray: one tray for XApp, StatusNotifier and legacy XEmbed icons.
+// Tray Drawer: one tray for XApp, StatusNotifier and legacy XEmbed icons.
 // Icons and other panel applets marked as hidden are tucked away in a drawer that slides
 // out along the panel.
 
@@ -19,7 +19,7 @@ const St = imports.gi.St;
 const Tooltips = imports.ui.tooltips;
 const XApp = imports.gi.XApp;
 
-const UUID = "collapsible-systray@beatlink";
+const UUID = "tray-drawer@beatlink";
 const SYSTRAY_UUID = "systray@cinnamon.org";
 const XAPP_STATUS_UUID = "xapp-status@cinnamon.org";
 const XAPP_NAME_PREFIX = "org.x.StatusIcon.";
@@ -391,7 +391,7 @@ class XEmbedItem {
 
 // A frame that clips the icon row and keeps it pressed against the arrow while the frame resizes.
 // Reloading the applet runs this file again, and a type can only be registered once per session, so the class is kept on global.
-const DrawerClip = global.collapsible_systray_drawer_clip || GObject.registerClass({ GTypeName: "CollapsibleSystrayDrawerClip" },
+const DrawerClip = global.tray_drawer_clip || GObject.registerClass({ GTypeName: "TrayDrawerClip" },
 class DrawerClip extends St.Widget {
     _init(vertical) {
         super._init({ clip_to_allocation: true, visible: false });
@@ -442,20 +442,20 @@ class DrawerClip extends St.Widget {
         row.allocate(row_box, flags);
     }
 });
-global.collapsible_systray_drawer_clip = DrawerClip;
+global.tray_drawer_clip = DrawerClip;
 
 // ============================================================================
 // Applet
 // ============================================================================
 
-class CollapsibleSystrayApplet extends Applet.Applet {
+class TrayDrawerApplet extends Applet.Applet {
     constructor(metadata, orientation, panel_height, instance_id) {
         super(orientation, panel_height, instance_id);
 
         this.orientation = orientation;
         this.setAllowedLayout(Applet.AllowedLayout.BOTH);
         this.actor.remove_style_class_name("applet-box");
-        this.actor.add_style_class_name("collapsible-systray");
+        this.actor.add_style_class_name("tray-drawer");
         this.actor.set_important(true);
 
         this.signals = new SignalManager.SignalManager(null);
@@ -554,8 +554,8 @@ class CollapsibleSystrayApplet extends Applet.Applet {
     build_panel_widgets() {
         let vertical = is_vertical_side(this.orientation);
 
-        this.pinned_box = new St.BoxLayout({ vertical: vertical, style_class: "collapsible-systray-pinned" });
-        this.drawer_box = new St.BoxLayout({ vertical: vertical, style_class: "collapsible-systray-drawer" });
+        this.pinned_box = new St.BoxLayout({ vertical: vertical, style_class: "tray-drawer-pinned" });
+        this.drawer_box = new St.BoxLayout({ vertical: vertical, style_class: "tray-drawer-hidden" });
 
         // The drawer slides by resizing this clipping frame while the icons inside keep their size.
         this.drawer_clip = new DrawerClip(vertical);
@@ -563,7 +563,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         this.drawer_shown = false;
         this.arrow_icon = new St.Icon({ icon_type: St.IconType.SYMBOLIC, style_class: "system-status-icon" });
         this.arrow_button = new St.Bin({
-            style_class: "applet-box collapsible-systray-arrow",
+            style_class: "applet-box tray-drawer-arrow",
             reactive: true,
             track_hover: true,
             child: this.arrow_icon
@@ -975,7 +975,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
 
         if (this.dispatcher_needs_start()) {
             Main.statusIconDispatcher.start(this.actor.get_parent().get_parent());
-            Main.statusIconDispatcher._collapsible_systray_started = true;
+            Main.statusIconDispatcher._tray_drawer_started = true;
         }
         global.trayReloading = false;
         this.xembed_enabled = true;
@@ -989,7 +989,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
 
     // The tray manager takes the screen only once, so skip it after a reload or after the stock tray took it.
     dispatcher_needs_start() {
-        return !global.trayReloading && !Main.statusIconDispatcher._collapsible_systray_started && !this.systray_has_run;
+        return !global.trayReloading && !Main.statusIconDispatcher._tray_drawer_started && !this.systray_has_run;
     }
 
     systray_is_running() {
@@ -1151,5 +1151,5 @@ class CollapsibleSystrayApplet extends Applet.Applet {
 }
 
 function main(metadata, orientation, panel_height, instance_id) {
-    return new CollapsibleSystrayApplet(metadata, orientation, panel_height, instance_id);
+    return new TrayDrawerApplet(metadata, orientation, panel_height, instance_id);
 }

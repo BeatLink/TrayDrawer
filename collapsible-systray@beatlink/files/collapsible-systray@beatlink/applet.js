@@ -23,6 +23,10 @@ const SYSTRAY_UUID = "systray@cinnamon.org";
 const XAPP_STATUS_UUID = "xapp-status@cinnamon.org";
 const XAPP_NAME_PREFIX = "org.x.StatusIcon.";
 const DRAWER_ANIMATION_TIME = 200;
+const FALLBACK_ICON_SIZE = 16;
+const XEMBED_REVEAL_DELAY = 1000;
+const XEMBED_QUICK_REVEAL_DELAY = 100;
+const RECENT_ROLE_TIME = 5 * 1000 * 1000;
 
 Gettext.bindtextdomain(UUID, GLib.get_home_dir() + "/.local/share/locale");
 
@@ -56,6 +60,11 @@ function move_actor(actor, new_parent) {
     new_parent.add_child(actor);
 }
 
+// Ctrl + right click on an icon opens the tray's own menu instead of the app's.
+function is_tray_menu_click(event) {
+    return event.get_button() === Clutter.BUTTON_SECONDARY && (event.get_state() & Clutter.ModifierType.CONTROL_MASK) !== 0;
+}
+
 // ============================================================================
 // XApp status icons (also StatusNotifier icons, bridged by xapp-sn-watcher)
 // ============================================================================
@@ -63,6 +72,7 @@ function move_actor(actor, new_parent) {
 class XAppItem {
     constructor(applet, proxy) {
         this.applet = applet;
+        this._applet = applet;
         this.proxy = proxy;
         this.kind = "xapp";
         this.in_popup = false;
@@ -85,7 +95,7 @@ class XAppItem {
         this.actor.connect("button-press-event", (actor, event) => this.on_button_press(actor, event));
         this.actor.connect("button-release-event", (actor, event) => this.on_button_release(actor, event));
         this.actor.connect("scroll-event", (actor, event) => this.on_scroll(actor, event));
-        this.actor.connect("enter-event", () => { this.tooltip.preventShow = false; });
+        this.actor.connect("enter-event", () => { this.tooltip.preventShow = this.in_popup; });
         this.properties_changed_id = this.proxy.connect("g-properties-changed", (proxy, changed) => this.on_properties_changed(changed));
 
         this.refresh();
@@ -111,7 +121,7 @@ class XAppItem {
         if ("TooltipText" in names) this.set_tooltip_text(this.proxy.tooltip_text);
         if ("Label" in names) this.set_label(this.proxy.label);
         if ("Visible" in names) this.set_visible(this.proxy.visible);
-        if ("Name" in names) this.applet.place_items();
+        if ("Name" in names) this.applet.queue_place_items();
         if (("PrimaryMenuIsOpen" in names && !this.proxy.primary_menu_is_open) ||
             ("SecondaryMenuIsOpen" in names && !this.proxy.secondary_menu_is_open)) {
             this.actor.sync_hover();
@@ -138,6 +148,14 @@ class XAppItem {
         this.icon_holder.y_expand = in_popup;
         this.set_orientation(this.applet.orientation);
         this.set_label(this.proxy.label);
+
+        // Panel tooltips refuse to show while a menu is open, and the popup is one.
+        if (in_popup) {
+            this.tooltip.hide();
+            this.tooltip.preventShow = true;
+        } else {
+            this.set_tooltip_text(this.proxy.tooltip_text);
+        }
     }
 
     set_orientation(orientation) {
@@ -151,12 +169,13 @@ class XAppItem {
 
     set_icon_name(icon_name) {
         if (!icon_name) {
+            this.icon_loader_handle = null;
             this.icon_holder.hide();
             return;
         }
 
         let icon_type = icon_name.match(/symbolic/) ? St.IconType.SYMBOLIC : St.IconType.FULLCOLOR;
-        let icon_size = this.applet.getPanelIconSize(icon_type);
+        let icon_size = this.applet.panel_icon_size(icon_type);
         this.proxy.icon_size = icon_size;
 
         // Image files may be wider than tall, so let them stretch along a horizontal panel.
@@ -176,6 +195,7 @@ class XAppItem {
             return;
         }
 
+        this.icon_loader_handle = null;
         this.icon_holder.child = new St.Icon({ icon_type: icon_type, icon_size: icon_size, icon_name: icon_name });
         this.icon_holder.show();
     }
@@ -197,12 +217,12 @@ class XAppItem {
     set_visible(visible) {
         if (this.actor.visible !== visible) {
             this.actor.visible = visible;
-            this.applet.place_items();
+            this.applet.queue_place_items();
         }
     }
 
-    position_for_menu() {
-        let allocation = Cinnamon.util_get_transformed_allocation(this.actor);
+    position_for_menu(actor = this.actor) {
+        let allocation = Cinnamon.util_get_transformed_allocation(actor);
         let x = Math.round(allocation.x1 / global.ui_scale);
         let y = Math.round(allocation.y1 / global.ui_scale);
         let width = Math.round((allocation.x2 - allocation.x1) / global.ui_scale);
@@ -225,21 +245,22 @@ class XAppItem {
         this.tooltip.hide();
         this.tooltip.preventShow = true;
 
-        // Ctrl + right click falls through to the tray's own menu.
-        if (event.get_button() === Clutter.BUTTON_SECONDARY && (event.get_state() & Clutter.ModifierType.CONTROL_MASK)) {
+        if (is_tray_menu_click(event)) {
             return Clutter.EVENT_PROPAGATE;
         }
-
-        let [x, y, side] = this.position_for_menu();
+        this.applet.note_activity();
 
         // Inside the popup the whole click is sent at once, because the popup must close first to free the pointer.
         if (this.in_popup) {
+            // The app's menu opens against the arrow, since the popup it was clicked in is about to close.
+            let [x, y, side] = this.position_for_menu(this.applet.arrow_button);
             this.applet.close_grid();
             this.proxy.call_button_press(x, y, event.get_button(), event.get_time(), side, null, null);
             this.proxy.call_button_release(x, y, event.get_button(), event.get_time(), side, null, null);
             return Clutter.EVENT_STOP;
         }
 
+        let [x, y, side] = this.position_for_menu();
         this.proxy.call_button_press(x, y, event.get_button(), event.get_time(), side, null, null);
         return Clutter.EVENT_STOP;
     }
@@ -263,6 +284,7 @@ class XAppItem {
         };
         let direction = directions[event.get_scroll_direction()];
 
+        this.applet.note_activity();
         if (direction) {
             this.proxy.call_scroll(direction[1], direction[0], event.get_time(), null, null);
         }
@@ -287,21 +309,30 @@ class XAppItem {
 class XEmbedItem {
     constructor(applet, icon, role) {
         this.applet = applet;
+        this._applet = applet;
         this.icon = icon;
         this.role = role;
         this.kind = "xembed";
         this.in_popup = false;
         this.reveal_source_id = 0;
 
-        this.actor = new St.Bin({ style_class: "applet-box", child: icon });
+        this.actor = new St.Bin({
+            style_class: "applet-box",
+            child: icon,
+            reactive: !global.settings.get_boolean("panel-edit-mode")
+        });
         this.actor.set_y_align(Clutter.ActorAlign.FILL);
         icon.set_x_align(Clutter.ActorAlign.CENTER);
         icon.set_y_align(Clutter.ActorAlign.FILL);
 
-        // Give the embedded window a second to settle before showing it, as the stock tray does.
+        // The icon handles its own clicks, so stop them here before they reach the tray.
+        this.actor.connect("button-press-event", (actor, event) => this.on_wrapper_button_event(event));
+        this.actor.connect("button-release-event", (actor, event) => this.on_wrapper_button_event(event));
+
+        // Give the embedded window time to settle before showing it, as the stock tray does.
         icon.visible = false;
         icon.opacity = 0;
-        this.reveal_source_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        this.reveal_source_id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, applet.xembed_reveal_delay(role), () => {
             this.reveal_source_id = 0;
             if (icon.is_finalized()) {
                 return GLib.SOURCE_REMOVE;
@@ -328,7 +359,7 @@ class XEmbedItem {
     }
 
     resize() {
-        let size = this.applet.getPanelIconSize(St.IconType.FULLCOLOR) * global.ui_scale;
+        let size = this.applet.panel_icon_size(St.IconType.FULLCOLOR) * global.ui_scale;
         this.icon.set_size(size, size);
     }
 
@@ -348,6 +379,11 @@ class XEmbedItem {
     }
 
     set_reactive(reactive) {
+        this.actor.reactive = reactive;
+    }
+
+    on_wrapper_button_event(event) {
+        return is_tray_menu_click(event) ? Clutter.EVENT_PROPAGATE : Clutter.EVENT_STOP;
     }
 
     // Wrapping the call in a modal span drops the pointer grab so the app can open its own menu.
@@ -367,6 +403,14 @@ class XEmbedItem {
             this.actor.remove_style_pseudo_class("hover");
         }
 
+        let is_button_event = event_type === Clutter.EventType.BUTTON_PRESS || event_type === Clutter.EventType.BUTTON_RELEASE;
+        if (is_button_event && is_tray_menu_click(event)) {
+            return Clutter.EVENT_PROPAGATE;
+        }
+        if (event_type === Clutter.EventType.BUTTON_PRESS) {
+            this.applet.note_activity();
+        }
+
         if (this.in_popup && event_type === Clutter.EventType.BUTTON_PRESS) {
             this.applet.close_grid();
             this.forward_event(Clutter.EventType.BUTTON_PRESS, event);
@@ -383,6 +427,7 @@ class XEmbedItem {
 
     destroy() {
         this.reveal_source_id = remove_source(this.reveal_source_id);
+        this.applet.remember_xembed_role(this.role);
         if (this.icon.get_parent() === this.actor) {
             this.actor.remove_actor(this.icon);
         }
@@ -409,14 +454,17 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         this.hidden_applet_actors = new Map();
         this.expanded = false;
         this.removed = false;
-        this.hidden_count = 0;
         this.auto_collapse_source_id = 0;
         this.hover_source_id = 0;
         this.scale_source_id = 0;
         this.sync_applets_source_id = 0;
+        this.place_items_source_id = 0;
         this.xembed_enabled = false;
+        this.systray_has_run = false;
+        this.recently_seen_roles = new Map();
 
         this.bind_settings(instance_id);
+        this.state = this.compute_state();
         this.build_panel_widgets();
         this.build_grid_menu();
         this.build_context_menu();
@@ -464,6 +512,12 @@ class CollapsibleSystrayApplet extends Applet.Applet {
 
     get in_edit_mode() {
         return global.settings.get_boolean("panel-edit-mode");
+    }
+
+    // Falls back to a usual size while the panel cannot report one yet.
+    panel_icon_size(icon_type = St.IconType.FULLCOLOR) {
+        let size = this.getPanelIconSize(icon_type);
+        return typeof size === "number" ? size : FALLBACK_ICON_SIZE;
     }
 
     is_item_hidden(item) {
@@ -518,6 +572,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         });
         this.arrow_tooltip = new Tooltips.PanelItemTooltip({ actor: this.arrow_button, _applet: this }, "", this.orientation);
         this.arrow_button.connect("enter-event", () => this.on_arrow_entered());
+        this.arrow_button.connect("scroll-event", (actor, event) => this.on_arrow_scrolled(event));
 
         // The arrow comes last so it stays put under the pointer while the drawer opens.
         this.actor.add_actor(this.pinned_box);
@@ -593,13 +648,27 @@ class CollapsibleSystrayApplet extends Applet.Applet {
             GLib.utf8_collate(first.label_text.toLowerCase(), second.label_text.toLowerCase()));
     }
 
+    // Works out once which icons and applets are tucked away, for the grid and the arrow to read.
+    compute_state() {
+        let hidden_items = this.in_edit_mode ? [] :
+            this.sorted_items().filter(item => this.is_item_hidden(item) && item.actor.visible);
+        let hidden_applet_count = this.panel_applets().filter(([key]) => this.hidden_applets[key]).length;
+        return {
+            hidden_items: hidden_items,
+            hidden_applet_count: hidden_applet_count,
+            has_hidden_applets: hidden_applet_count > 0
+        };
+    }
+
     // Puts every icon on the panel, in the drawer or in the popup grid, and redraws the arrow.
     place_items() {
+        this.place_items_source_id = remove_source(this.place_items_source_id);
         let cell_size = this.grid_cell_size();
         let hidden_count = 0;
 
         for (let item of this.sorted_items()) {
-            let hidden = this.is_item_hidden(item);
+            // Panel edit mode puts every icon on the panel so the whole tray can be seen.
+            let hidden = !this.in_edit_mode && this.is_item_hidden(item);
             let in_popup = hidden && this.is_grid_mode;
             let target = hidden ? this.drawer_box : this.pinned_box;
 
@@ -628,10 +697,24 @@ class CollapsibleSystrayApplet extends Applet.Applet {
             }
         }
 
-        this.hidden_count = hidden_count;
+        this.state = this.compute_state();
         this.update_drawer();
         this.update_grid();
         this.update_arrow();
+    }
+
+    // Many icon changes arrive together, so the icons are placed once they settle.
+    queue_place_items() {
+        if (this.place_items_source_id > 0) {
+            return;
+        }
+        this.place_items_source_id = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this.place_items_source_id = 0;
+            if (!this.removed) {
+                this.place_items();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     update_layout() {
@@ -707,7 +790,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
     }
 
     grid_cell_size() {
-        return (this.getPanelIconSize(St.IconType.FULLCOLOR) + 16) * global.ui_scale;
+        return (this.panel_icon_size(St.IconType.FULLCOLOR) + 16) * global.ui_scale;
     }
 
     grid_row(index) {
@@ -726,16 +809,14 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         this.grid.visible = shown_cells > 0;
         this.grid_empty_label.visible = shown_cells === 0;
 
-        let applet_count = this.panel_applets().filter(([key]) => this.hidden_applets[key]).length;
-        this.grid_applets_separator.actor.visible = applet_count > 0;
-        this.grid_applets_item.actor.visible = applet_count > 0;
+        this.grid_applets_separator.actor.visible = this.state.has_hidden_applets;
+        this.grid_applets_item.actor.visible = this.state.has_hidden_applets;
         this.grid_applets_item.label.set_text(this.expanded ? _("Hide applets again") : _("Show hidden applets"));
     }
 
     // The arrow points toward where the hidden icons will appear.
     update_arrow() {
-        let has_hidden_applets = this.panel_applets().some(([key]) => this.hidden_applets[key]);
-        this.arrow_button.visible = this.hidden_count > 0 || has_hidden_applets || this.in_edit_mode;
+        this.arrow_button.visible = this.state.hidden_items.length > 0 || this.state.has_hidden_applets || this.in_edit_mode;
 
         let vertical = is_vertical_side(this.orientation);
         let icon_name;
@@ -765,7 +846,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         }
 
         this.arrow_icon.icon_name = icon_name;
-        this.arrow_icon.icon_size = this.getPanelIconSize(St.IconType.SYMBOLIC);
+        this.arrow_icon.icon_size = this.panel_icon_size(St.IconType.SYMBOLIC);
     }
 
     refresh_items() {
@@ -839,7 +920,23 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         return false;
     }
 
+    // Restarts the auto-collapse wait after the user works with an icon.
+    note_activity() {
+        if (this.expanded) {
+            this.schedule_auto_collapse();
+        }
+    }
+
+    // True when the click landed on a tray icon rather than on the arrow.
+    is_icon_event(event) {
+        let source = event.get_source();
+        return !!source && (this.pinned_box.contains(source) || this.drawer_clip.contains(source));
+    }
+
     on_applet_clicked(event) {
+        if (this.is_icon_event(event)) {
+            return;
+        }
         this.hover_source_id = remove_source(this.hover_source_id);
         if (this.is_grid_mode) {
             this.grid_menu.toggle();
@@ -849,7 +946,30 @@ class CollapsibleSystrayApplet extends Applet.Applet {
     }
 
     on_applet_middle_clicked(event) {
+        if (this.is_icon_event(event)) {
+            return;
+        }
         this.set_expanded(!this.expanded);
+    }
+
+    // Scrolling up or left over the arrow shows the hidden icons, and down or right hides them.
+    on_arrow_scrolled(event) {
+        let direction = event.get_scroll_direction();
+        if (direction === Clutter.ScrollDirection.SMOOTH || this.in_edit_mode) {
+            return Clutter.EVENT_STOP;
+        }
+
+        let open = direction === Clutter.ScrollDirection.UP || direction === Clutter.ScrollDirection.LEFT;
+        if (this.is_grid_mode) {
+            if (open && !this.grid_menu.isOpen) {
+                this.grid_menu.open(true);
+            } else if (!open) {
+                this.close_grid();
+            }
+        } else if (open !== this.expanded) {
+            this.set_expanded(open);
+        }
+        return Clutter.EVENT_STOP;
     }
 
     on_arrow_entered() {
@@ -913,12 +1033,19 @@ class CollapsibleSystrayApplet extends Applet.Applet {
             }
         }
 
+        // Applets that left this panel get their visibility back, unless they are already destroyed.
         for (let [actor, visible_id] of this.hidden_applet_actors) {
-            if (!current_actors.has(actor)) {
-                this.hidden_applet_actors.delete(actor);
+            if (current_actors.has(actor)) {
+                continue;
+            }
+            this.hidden_applet_actors.delete(actor);
+            if (!actor.is_finalized()) {
+                actor.disconnect(visible_id);
+                actor.show();
             }
         }
 
+        this.state = this.compute_state();
         this.update_grid();
         this.update_arrow();
     }
@@ -953,7 +1080,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
             return;
         }
         this.items.set(key, new XAppItem(this, proxy));
-        this.place_items();
+        this.queue_place_items();
     }
 
     on_xapp_icon_removed(proxy) {
@@ -962,7 +1089,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         if (item) {
             item.destroy();
             this.items.delete(key);
-            this.place_items();
+            this.queue_place_items();
         }
     }
 
@@ -980,7 +1107,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         if (this.xembed_enabled) {
             Main.statusIconDispatcher.redisplay();
         }
-        this.place_items();
+        this.queue_place_items();
     }
 
     // ------------------------------------------------------------------------
@@ -988,15 +1115,16 @@ class CollapsibleSystrayApplet extends Applet.Applet {
     // ------------------------------------------------------------------------
 
     start_xembed() {
-        if (Meta.is_wayland_compositor()) {
+        if (Meta.is_wayland_compositor() || this.xembed_enabled) {
             return;
         }
         if (this.systray_is_running()) {
+            this.systray_has_run = true;
             global.logWarning(`${UUID}: the stock System Tray applet is running, so it keeps the legacy tray icons`);
             return;
         }
 
-        if (!global.trayReloading && !Main.statusIconDispatcher._collapsible_systray_started) {
+        if (this.dispatcher_needs_start()) {
             Main.statusIconDispatcher.start(this.actor.get_parent().get_parent());
             Main.statusIconDispatcher._collapsible_systray_started = true;
         }
@@ -1010,8 +1138,38 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         Main.statusIconDispatcher.redisplay();
     }
 
+    // The tray manager takes the screen only once, so skip it after a reload or after the stock tray took it.
+    dispatcher_needs_start() {
+        return !global.trayReloading && !Main.statusIconDispatcher._collapsible_systray_started && !this.systray_has_run;
+    }
+
     systray_is_running() {
         return AppletManager.getRunningInstancesForUuid(SYSTRAY_UUID).length > 0;
+    }
+
+    // Takes over the legacy icons once the stock System Tray is gone, and only warns if it comes back.
+    on_enabled_applets_changed() {
+        if (!this.xembed_enabled) {
+            this.start_xembed();
+        } else if (this.systray_is_running() && !this.systray_has_run) {
+            this.systray_has_run = true;
+            global.logWarning(`${UUID}: the stock System Tray applet was added, so legacy tray icons may move to it`);
+        }
+    }
+
+    // Remembers when a legacy icon went away, so the same app can come back without the long wait.
+    remember_xembed_role(role) {
+        this.recently_seen_roles.set(role, GLib.get_monotonic_time());
+    }
+
+    xembed_reveal_delay(role) {
+        let now = GLib.get_monotonic_time();
+        for (let [seen_role, seen_time] of this.recently_seen_roles) {
+            if (now - seen_time > RECENT_ROLE_TIME) {
+                this.recently_seen_roles.delete(seen_role);
+            }
+        }
+        return this.recently_seen_roles.has(role) ? XEMBED_QUICK_REVEAL_DELAY : XEMBED_REVEAL_DELAY;
     }
 
     update_tray_orientation() {
@@ -1028,7 +1186,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         }
         global.log(`${UUID}: adding tray icon ${role}`);
         this.items.set(icon, new XEmbedItem(this, icon, role));
-        this.place_items();
+        this.queue_place_items();
     }
 
     on_xembed_icon_removed(icon) {
@@ -1036,7 +1194,7 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         if (item) {
             item.destroy();
             this.items.delete(icon);
-            this.place_items();
+            this.queue_place_items();
         }
     }
 
@@ -1056,10 +1214,12 @@ class CollapsibleSystrayApplet extends Applet.Applet {
     on_applet_added_to_panel() {
         this.removed = false;
         this.start_xembed();
+        this.signals.connect(global.settings, "changed::enabled-applets", () => this.on_enabled_applets_changed());
 
         for (let proxy of this.monitor.list_icons()) {
             this.on_xapp_icon_added(proxy);
         }
+        this.place_items();
 
         if (this.panel) {
             for (let zone of [this.panel._leftBox, this.panel._centerBox, this.panel._rightBox]) {
@@ -1080,11 +1240,14 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         this.auto_collapse_source_id = remove_source(this.auto_collapse_source_id);
         this.scale_source_id = remove_source(this.scale_source_id);
         this.sync_applets_source_id = remove_source(this.sync_applets_source_id);
+        this.place_items_source_id = remove_source(this.place_items_source_id);
         this.cross_size_source_id = remove_source(this.cross_size_source_id);
 
         for (let [actor, visible_id] of this.hidden_applet_actors) {
-            actor.disconnect(visible_id);
-            actor.show();
+            if (!actor.is_finalized()) {
+                actor.disconnect(visible_id);
+                actor.show();
+            }
         }
         this.hidden_applet_actors.clear();
 

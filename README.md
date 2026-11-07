@@ -26,10 +26,14 @@ XApp icon a second time.
 
 - **Left-click the arrow** to open the popup or expand the drawer.
 - **Middle-click the arrow** to show or hide the hidden applets.
+- **Scroll on the arrow** to open (up or left) or close (down or right).
 - **Right-click the tray** (or Ctrl + right-click an icon) for two lists:
   - *Tray icons shown on the panel*: switch an icon on to keep it on the panel at all times.
   - *Applets to hide*: switch an applet on to tuck it away with the hidden icons.
-- In panel edit mode everything is shown so hidden applets can still be moved or removed.
+- Icon switches are keyed by the icon's name (the XApp name, or the window class of a legacy icon),
+  so two instances of the same app share one switch.
+- In panel edit mode every icon and applet is shown on the panel so hidden applets can still be
+  moved or removed.
 
 New icons start hidden; turn off *Hide new tray icons* in the settings to keep them on the panel.
 

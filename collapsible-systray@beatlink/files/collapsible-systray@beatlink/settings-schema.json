@@ -3,25 +3,6 @@
         "type": "header",
         "description": "Layout"
     },
-    "display-mode": {
-        "type": "combobox",
-        "default": "grid",
-        "description": "Show hidden icons",
-        "options": {
-            "In a popup grid": "grid",
-            "By expanding the tray along the panel": "drawer"
-        }
-    },
-    "grid-columns": {
-        "type": "spinbutton",
-        "default": 4,
-        "min": 1,
-        "max": 12,
-        "step": 1,
-        "units": "columns",
-        "dependency": "display-mode=grid",
-        "description": "Popup width"
-    },
     "collapse-new-icons": {
         "type": "checkbox",
         "default": true,
@@ -51,7 +32,7 @@
         "type": "checkbox",
         "default": true,
         "description": "Collapse again on its own",
-        "tooltip": "Applies to the expanded drawer and to applets revealed from the popup."
+        "tooltip": "Applies to the expanded drawer."
     },
     "auto-collapse-delay": {
         "type": "spinbutton",

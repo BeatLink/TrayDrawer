@@ -3,8 +3,7 @@
 A Cinnamon panel applet that hosts every kind of tray icon in one place and tucks away the ones you
 do not need to see.
 
-- **Two ways to show hidden icons**: a drawer that expands the tray along the panel, or a popup grid
-  above the tray.
+- **A drawer for hidden icons**: the tray expands along the panel to show them.
 - **All tray icon types**: XApp status icons, StatusNotifierItem / AppIndicator icons (Cinnamon's
   `xapp-sn-watcher` turns these into XApp icons), and legacy XEmbed icons.
 - **Hides other applets too**: pick any applet on the same panel and it disappears while the tray
@@ -24,7 +23,7 @@ XApp icon a second time.
 
 ## Use
 
-- **Left-click the arrow** to open the popup or expand the drawer.
+- **Left-click the arrow** to expand or collapse the drawer.
 - **Middle-click the arrow** to show or hide the hidden applets.
 - **Scroll on the arrow** to open (up or left) or close (down or right).
 - **Right-click the tray** (or Ctrl + right-click an icon) for two lists:
@@ -36,13 +35,6 @@ XApp icon a second time.
   moved or removed.
 
 New icons start hidden; turn off *Hide new tray icons* in the settings to keep them on the panel.
-
-## Hidden applets in the popup grid
-
-Hidden applets are not moved into the popup grid. An applet belongs to its panel: panel edit mode
-drags it there, its own menus open against it and close the popup when they take the pointer, and
-Cinnamon saves its position from it. Instead, in grid mode the popup has a *Show hidden applets*
-button (or middle-click the arrow) that brings them back on the panel until the tray collapses.
 
 ## License
 

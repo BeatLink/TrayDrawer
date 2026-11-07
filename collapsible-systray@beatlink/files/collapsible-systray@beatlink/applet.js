@@ -8,6 +8,7 @@ const Cinnamon = imports.gi.Cinnamon;
 const Clutter = imports.gi.Clutter;
 const GLib = imports.gi.GLib;
 const Gettext = imports.gettext;
+const GObject = imports.gi.GObject;
 const Gtk = imports.gi.Gtk;
 const Main = imports.ui.main;
 const Meta = imports.gi.Meta;
@@ -436,6 +437,63 @@ class XEmbedItem {
 }
 
 // ============================================================================
+// Drawer clip
+// ============================================================================
+
+// A frame that clips the icon row and keeps it pressed against the arrow while the frame resizes.
+const DrawerClip = GObject.registerClass(
+class DrawerClip extends St.Widget {
+    _init(vertical) {
+        super._init({ clip_to_allocation: true, visible: false });
+        this.vertical = vertical;
+    }
+
+    vfunc_get_preferred_width(for_height) {
+        let row = this.get_first_child();
+        if (!row) {
+            return [0, 0];
+        }
+        let [, natural_width] = row.get_preferred_width(for_height);
+        return [0, natural_width];
+    }
+
+    vfunc_get_preferred_height(for_width) {
+        let row = this.get_first_child();
+        if (!row) {
+            return [0, 0];
+        }
+        let [, natural_height] = row.get_preferred_height(for_width);
+        return [0, natural_height];
+    }
+
+    vfunc_allocate(box, flags) {
+        this.set_allocation(box, flags);
+        let row = this.get_first_child();
+        if (!row) {
+            return;
+        }
+
+        let width = box.x2 - box.x1;
+        let height = box.y2 - box.y1;
+        let row_box = new Clutter.ActorBox();
+        if (this.vertical) {
+            let [, natural_height] = row.get_preferred_height(width);
+            row_box.x1 = 0;
+            row_box.x2 = width;
+            row_box.y1 = height - natural_height;
+            row_box.y2 = height;
+        } else {
+            let [, natural_width] = row.get_preferred_width(height);
+            row_box.x1 = width - natural_width;
+            row_box.x2 = width;
+            row_box.y1 = 0;
+            row_box.y2 = height;
+        }
+        row.allocate(row_box, flags);
+    }
+});
+
+// ============================================================================
 // Applet
 // ============================================================================
 
@@ -556,13 +614,9 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         this.drawer_box = new St.BoxLayout({ vertical: vertical, style_class: "collapsible-systray-drawer" });
 
         // The drawer slides by resizing this clipping frame while the icons inside keep their size.
-        this.drawer_clip = new St.Widget({ clip_to_allocation: true, visible: false });
+        this.drawer_clip = new DrawerClip(vertical);
         this.drawer_clip.add_child(this.drawer_box);
         this.drawer_shown = false;
-        this.cross_size_source_id = 0;
-        this.actor.connect("notify::height", () => this.queue_drawer_cross_size());
-        this.actor.connect("notify::width", () => this.queue_drawer_cross_size());
-        this.update_drawer_constraints();
         this.arrow_icon = new St.Icon({ icon_type: St.IconType.SYMBOLIC, style_class: "system-status-icon" });
         this.arrow_button = new St.Bin({
             style_class: "applet-box collapsible-systray-arrow",
@@ -723,36 +777,6 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         }
         this.place_items();
         this.sync_applets();
-    }
-
-    // Keeps the icons pinned to the arrow's side of the frame.
-    update_drawer_constraints() {
-        let vertical = is_vertical_side(this.orientation);
-        this.drawer_box.clear_constraints();
-        this.drawer_box.add_constraint(new Clutter.AlignConstraint({
-            source: this.drawer_clip,
-            align_axis: vertical ? Clutter.AlignAxis.Y_AXIS : Clutter.AlignAxis.X_AXIS,
-            factor: 1.0
-        }));
-        this.queue_drawer_cross_size();
-    }
-
-    // Copies the panel's thickness onto the icon row by value, since binding the two sizes makes Clutter loop forever.
-    queue_drawer_cross_size() {
-        if (this.cross_size_source_id > 0) {
-            return;
-        }
-        this.cross_size_source_id = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            this.cross_size_source_id = 0;
-            let vertical = is_vertical_side(this.orientation);
-            let thickness = vertical ? this.actor.width : this.actor.height;
-            if (vertical) {
-                this.drawer_box.set_size(thickness, -1);
-            } else {
-                this.drawer_box.set_size(-1, thickness);
-            }
-            return GLib.SOURCE_REMOVE;
-        });
     }
 
     update_drawer(animate = false) {
@@ -1241,7 +1265,6 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         this.scale_source_id = remove_source(this.scale_source_id);
         this.sync_applets_source_id = remove_source(this.sync_applets_source_id);
         this.place_items_source_id = remove_source(this.place_items_source_id);
-        this.cross_size_source_id = remove_source(this.cross_size_source_id);
 
         for (let [actor, visible_id] of this.hidden_applet_actors) {
             if (!actor.is_finalized()) {
@@ -1281,7 +1304,8 @@ class CollapsibleSystrayApplet extends Applet.Applet {
         let vertical = is_vertical_side(orientation);
         this.pinned_box.vertical = vertical;
         this.drawer_box.vertical = vertical;
-        this.update_drawer_constraints();
+        this.drawer_clip.vertical = vertical;
+        this.drawer_clip.queue_relayout();
         this.grid_menu.setArrowSide(orientation);
 
         for (let item of this.items.values()) {

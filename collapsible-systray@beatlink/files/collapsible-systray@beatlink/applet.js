@@ -441,7 +441,8 @@ class XEmbedItem {
 // ============================================================================
 
 // A frame that clips the icon row and keeps it pressed against the arrow while the frame resizes.
-const DrawerClip = GObject.registerClass(
+// Reloading the applet runs this file again, and a type can only be registered once per session, so the class is kept on global.
+const DrawerClip = global.collapsible_systray_drawer_clip || GObject.registerClass({ GTypeName: "CollapsibleSystrayDrawerClip" },
 class DrawerClip extends St.Widget {
     _init(vertical) {
         super._init({ clip_to_allocation: true, visible: false });
@@ -492,6 +493,7 @@ class DrawerClip extends St.Widget {
         row.allocate(row_box, flags);
     }
 });
+global.collapsible_systray_drawer_clip = DrawerClip;
 
 // ============================================================================
 // Applet

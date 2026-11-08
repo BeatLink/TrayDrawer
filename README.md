@@ -1,5 +1,7 @@
 # Tray Drawer
 
+![The drawer expanding and collapsing on the panel](screenshot.gif)
+
 A Cinnamon panel applet that hosts every kind of tray icon in one place and tucks away the ones you
 do not need to see.
 

@@ -48,6 +48,10 @@
         "type": "generic",
         "default": {}
     },
+    "item-order": {
+        "type": "generic",
+        "default": []
+    },
     "hidden-applets": {
         "type": "generic",
         "default": {}

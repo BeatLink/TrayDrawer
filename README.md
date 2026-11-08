@@ -31,6 +31,9 @@ XApp icon a second time.
 - **Right-click the tray** (or Ctrl + right-click an icon) for two lists:
   - *Tray icons shown on the panel*: switch an icon on to keep it on the panel at all times.
   - *Applets to hide*: switch an applet on to tuck it away with the hidden icons.
+- Both lists have up and down arrows beside each switch to move an item along the panel. Icon order
+  is stored by the applet; applet order is written to Cinnamon's own panel layout, exactly as panel
+  edit mode would.
 - Icon switches are keyed by the icon's name (the XApp name, or the window class of a legacy icon),
   so two instances of the same app share one switch.
 - In panel edit mode every icon and applet is shown on the panel so hidden applets can still be

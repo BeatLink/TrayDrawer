@@ -28,6 +28,7 @@ const FALLBACK_ICON_SIZE = 16;
 const XEMBED_REVEAL_DELAY = 1000;
 const XEMBED_QUICK_REVEAL_DELAY = 100;
 const RECENT_ROLE_TIME = 5 * 1000 * 1000;
+const PANEL_ZONES = ["left", "center", "right"];
 
 Gettext.bindtextdomain(UUID, GLib.get_home_dir() + "/.local/share/locale");
 
@@ -59,6 +60,23 @@ function move_actor(actor, new_parent) {
         old_parent.remove_child(actor);
     }
     new_parent.add_child(actor);
+}
+
+// Swaps two entries of a list in place.
+function swap_entries(list, first_index, second_index) {
+    [list[first_index], list[second_index]] = [list[second_index], list[first_index]];
+}
+
+// Reads one enabled-applets entry, `panel<id>:<location>:<order>:<uuid>:<applet_id>`, or returns null.
+function parse_applet_entry(entry) {
+    if (typeof entry !== "string") {
+        return null;
+    }
+    let fields = entry.split(":");
+    if (fields.length < 5 || !/^panel\d+$/.test(fields[0]) || !/^-?\d+$/.test(fields[2])) {
+        return null;
+    }
+    return { fields: fields, panel: fields[0], location: fields[1], order: parseInt(fields[2]), uuid: fields[3], applet_id: fields[4] };
 }
 
 // Ctrl + right click on an icon opens the tray's own menu instead of the app's.
@@ -468,6 +486,7 @@ class TrayDrawerApplet extends Applet.Applet {
         this.scale_source_id = 0;
         this.sync_applets_source_id = 0;
         this.place_items_source_id = 0;
+        this.refill_source_id = 0;
         this.xembed_enabled = false;
         this.systray_has_run = false;
         this.recently_seen_roles = new Map();
@@ -505,6 +524,7 @@ class TrayDrawerApplet extends Applet.Applet {
         let on_layout_changed = () => this.update_layout();
         this.settings.bind("collapse-new-icons", "collapse_new_icons", on_layout_changed);
         this.settings.bind("item-visibility", "item_visibility", on_layout_changed);
+        this.settings.bind("item-order", "item_order", on_layout_changed);
         this.settings.bind("hidden-applets", "hidden_applets", () => this.sync_applets());
         this.settings.bind("expand-on-hover", "expand_on_hover");
         this.settings.bind("hover-delay", "hover_delay");
@@ -592,24 +612,90 @@ class TrayDrawerApplet extends Applet.Applet {
     }
 
     fill_context_menu() {
+        this.fill_icons_submenu();
+        this.fill_applets_submenu();
+    }
+
+    fill_icons_submenu(focus_index = -1) {
         this.icons_submenu.menu.removeAll();
         let items = this.sorted_items();
-        for (let item of items) {
+        items.forEach((item, index) => {
             let switch_item = new PopupMenu.PopupSwitchMenuItem(item.label_text, !this.is_item_hidden(item));
             switch_item.connect("toggled", (menu_item, shown) => this.set_item_hidden(item, !shown));
+            this.add_move_buttons(switch_item, index > 0, index < items.length - 1, offset => {
+                this.move_item(item, offset);
+                this.refill_submenu(this.icons_submenu, () => this.fill_icons_submenu(index + offset));
+            });
             this.icons_submenu.menu.addMenuItem(switch_item);
-        }
+        });
         if (items.length === 0) {
             let empty_item = new PopupMenu.PopupMenuItem(_("No tray icons"), { reactive: false });
             this.icons_submenu.menu.addMenuItem(empty_item);
         }
+        this.focus_submenu_row(this.icons_submenu, focus_index);
+    }
 
+    fill_applets_submenu(focus_index = -1) {
         this.applets_submenu.menu.removeAll();
-        for (let [key, applet] of this.panel_applets()) {
+        let definitions = this.menu_applet_definitions();
+        definitions.forEach((definition, index) => {
+            let key = `${definition.uuid}#${definition.applet_id}`;
+            let applet = definition.applet;
             let name = applet._meta ? applet._(applet._meta.name) : applet._uuid;
             let switch_item = new PopupMenu.PopupSwitchMenuItem(name, !!this.hidden_applets[key]);
             switch_item.connect("toggled", (menu_item, hidden) => this.set_applet_hidden(key, hidden));
+            this.add_move_buttons(switch_item, this.find_applet_neighbour(definition, -1) !== null,
+                                  this.find_applet_neighbour(definition, 1) !== null, offset => {
+                this.move_applet(definition, offset);
+                this.refill_submenu(this.applets_submenu, () => this.fill_applets_submenu(index + offset));
+            });
             this.applets_submenu.menu.addMenuItem(switch_item);
+        });
+        this.focus_submenu_row(this.applets_submenu, focus_index);
+    }
+
+    // Puts up and down arrows beside the switch; the button takes the click so the switch stays as it is.
+    add_move_buttons(switch_item, can_move_up, can_move_down, on_move) {
+        let box = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER });
+        for (let [icon_name, offset, enabled] of [["go-up-symbolic", -1, can_move_up], ["go-down-symbolic", 1, can_move_down]]) {
+            let button = new St.Button({
+                child: new St.Icon({ icon_name: icon_name, icon_type: St.IconType.SYMBOLIC, icon_size: 16, style_class: "popup-menu-icon" }),
+                y_align: Clutter.ActorAlign.CENTER
+            });
+            // A disabled button stays reactive so its click is swallowed instead of reaching the switch.
+            if (enabled) {
+                button.connect("clicked", () => on_move(offset));
+            } else {
+                button.opacity = 80;
+                button.add_style_pseudo_class("insensitive");
+            }
+            box.add_child(button);
+        }
+
+        let switch_actor = switch_item._statusBin.child;
+        switch_item._statusBin.child = null;
+        box.add_child(switch_actor);
+        switch_item._statusBin.child = box;
+    }
+
+    // Refills once Cinnamon has taken in the change, moving key focus off the rows first,
+    // since focus falling back to the stage would close the menu.
+    refill_submenu(submenu, fill) {
+        this.refill_source_id = remove_source(this.refill_source_id);
+        this.refill_source_id = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this.refill_source_id = 0;
+            if (!this.removed && this._applet_context_menu.isOpen) {
+                submenu.actor.grab_key_focus();
+                fill();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    focus_submenu_row(submenu, index) {
+        let rows = submenu.menu._getMenuItems();
+        if (index >= 0 && index < rows.length) {
+            rows[index].actor.grab_key_focus();
         }
     }
 
@@ -617,9 +703,46 @@ class TrayDrawerApplet extends Applet.Applet {
     // Layout
     // ------------------------------------------------------------------------
 
+    // Icons named in item-order come first in that order, then the rest by name.
     sorted_items() {
-        return [...this.items.values()].sort((first, second) =>
-            GLib.utf8_collate(first.label_text.toLowerCase(), second.label_text.toLowerCase()));
+        let positions = new Map();
+        for (let [index, key] of this.item_order_keys().entries()) {
+            positions.set(key, index);
+        }
+        let position = item => positions.has(item.key) ? positions.get(item.key) : Infinity;
+        return [...this.items.values()].sort((first, second) => {
+            let first_position = position(first);
+            let second_position = position(second);
+            if (first_position !== second_position) {
+                return first_position < second_position ? -1 : 1;
+            }
+            return GLib.utf8_collate(first.label_text.toLowerCase(), second.label_text.toLowerCase());
+        });
+    }
+
+    item_order_keys() {
+        let order = Array.isArray(this.item_order) ? this.item_order : [];
+        return [...new Set(order.filter(key => typeof key === "string"))];
+    }
+
+    // Swaps an icon with its neighbour on screen, writing every present icon into item-order first.
+    move_item(item, offset) {
+        let items = this.sorted_items();
+        let index = items.indexOf(item);
+        let neighbour = items[index + offset];
+        if (index < 0 || !neighbour || neighbour.key === item.key) {
+            return;
+        }
+
+        let order = this.item_order_keys();
+        for (let present of items) {
+            if (!order.includes(present.key)) {
+                order.push(present.key);
+            }
+        }
+        swap_entries(order, order.indexOf(item.key), order.indexOf(neighbour.key));
+        this.item_order = order;
+        this.place_items();
     }
 
     // Works out once which icons and applets are tucked away, for the arrow to read.
@@ -846,15 +969,76 @@ class TrayDrawerApplet extends Applet.Applet {
     // Hiding other applets
     // ------------------------------------------------------------------------
 
-    // Lists [key, applet] for every other applet on this panel.
-    panel_applets() {
+    // Lists the definition of every other loaded applet on this panel.
+    panel_applet_definitions() {
         if (!this.panel) {
             return [];
         }
         return AppletManager.definitions
             .filter(definition => definition && definition.applet && definition.applet !== this &&
-                                  definition.panelId === this.panel.panelId)
+                                  definition.panelId === this.panel.panelId);
+    }
+
+    // Lists [key, applet] for every other applet on this panel.
+    panel_applets() {
+        return this.panel_applet_definitions()
             .map(definition => [`${definition.uuid}#${definition.applet_id}`, definition.applet]);
+    }
+
+    // Lists the other applets in panel order: zone by zone, then by order within a zone.
+    menu_applet_definitions() {
+        let zone_index = definition => {
+            let index = PANEL_ZONES.indexOf(definition.location_label);
+            return index < 0 ? PANEL_ZONES.length : index;
+        };
+        return this.panel_applet_definitions().sort((first, second) =>
+            (zone_index(first) - zone_index(second)) || (first.order - second.order));
+    }
+
+    // Reads enabled-applets and returns the entries sharing the applet's panel and zone, sorted by order.
+    zone_applet_entries(definition) {
+        let panel = `panel${definition.panelId}`;
+        let zone_entries = global.settings.get_strv("enabled-applets")
+            .map(parse_applet_entry)
+            .map((entry, index) => entry && Object.assign(entry, { index: index }))
+            .filter(entry => entry && entry.panel === panel && entry.location === definition.location_label)
+            .sort((first, second) => (first.order - second.order) || (first.index - second.index));
+        let position = zone_entries.findIndex(entry => entry.uuid === definition.uuid && entry.applet_id === String(definition.applet_id));
+        return { zone_entries: zone_entries, position: position };
+    }
+
+    // Returns the entry next to the applet in its zone, this applet included, or null.
+    find_applet_neighbour(definition, offset) {
+        let { zone_entries, position } = this.zone_applet_entries(definition);
+        if (position < 0) {
+            return null;
+        }
+        return zone_entries[position + offset] || null;
+    }
+
+    // Swaps the applet's order with its neighbour, as panel edit mode would, and lets Cinnamon move them.
+    move_applet(definition, offset) {
+        let { zone_entries, position } = this.zone_applet_entries(definition);
+        let moved = zone_entries[position];
+        let neighbour = zone_entries[position + offset];
+        if (position < 0 || !neighbour) {
+            return;
+        }
+
+        if (moved.order !== neighbour.order) {
+            [moved.order, neighbour.order] = [neighbour.order, moved.order];
+        } else {
+            // Equal orders cannot be swapped, so the whole zone is numbered afresh.
+            swap_entries(zone_entries, position, position + offset);
+            zone_entries.forEach((entry, index) => { entry.order = index; });
+        }
+
+        let raw_entries = global.settings.get_strv("enabled-applets");
+        for (let entry of zone_entries) {
+            entry.fields[2] = String(entry.order);
+            raw_entries[entry.index] = entry.fields.join(":");
+        }
+        global.settings.set_strv("enabled-applets", raw_entries);
     }
 
     // Hides chosen applets while collapsed and gives them back when expanded or in panel edit mode.
@@ -1090,6 +1274,7 @@ class TrayDrawerApplet extends Applet.Applet {
         this.scale_source_id = remove_source(this.scale_source_id);
         this.sync_applets_source_id = remove_source(this.sync_applets_source_id);
         this.place_items_source_id = remove_source(this.place_items_source_id);
+        this.refill_source_id = remove_source(this.refill_source_id);
 
         for (let [actor, visible_id] of this.hidden_applet_actors) {
             if (!actor.is_finalized()) {

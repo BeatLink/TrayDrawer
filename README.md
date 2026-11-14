@@ -1,5 +1,7 @@
 # Tray Drawer
 
+<a href="https://liberapay.com/BeatLink/donate"><img alt="Donate using Liberapay" src="https://liberapay.com/assets/widgets/donate.svg"></a>
+
 ![The drawer expanding and collapsing on the panel](screenshot.gif)
 
 A Cinnamon panel applet that hosts every kind of tray icon in one place and tucks away the ones you
